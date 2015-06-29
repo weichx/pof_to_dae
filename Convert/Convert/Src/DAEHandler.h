@@ -123,8 +123,10 @@ private:
 	void add_autocentering();
 	void add_mass();
 	void add_moment_of_inertia();
+	void write_subobject(int idx, pugi::xml_node &root);
 	void write_geometry(string &name, int idx, pcs_sobj &obj, pugi::xml_node &parent_node, pugi::xml_node &out_node);
 	void write_firepoints(pcs_turret &turret_instance, pugi::xml_node &node);
+	void map_destroyed_subobjects();
 	static void write_transform(pugi::xml_node& element, const vector3d& offset, const vector3d& norm, const vector3d& base, float scale = 1.0f, float external_scale = 1.0f);
 	static void write_transform_binormal(pugi::xml_node& element, const vector3d& offset, const vector3d& norm, const vector3d& binorm, const vector3d& base, float scale = 1.0f, float external_scale = 1.0f);
 

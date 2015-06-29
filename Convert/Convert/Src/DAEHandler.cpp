@@ -19,7 +19,7 @@ using namespace std;
 
 namespace std {
 	template<>
-	struct hash<std::pair<float, float>> {
+	struct hash < std::pair<float, float> > {
 		typedef std::pair<float, float> argument_type;
 		typedef std::size_t value_type;
 
@@ -1488,6 +1488,8 @@ void DAESaver::add_textures() {
 }
 
 void DAESaver::add_geom() {
+
+	//todo -- reduce mesh count by checking for equal meshes, especially in turrets
 	geoms = root.append_child("library_geometries");
 	scene = root.append_child("library_visual_scenes").append_child("visual_scene");
 	scene.append_attribute("id") = "Scene";
@@ -1516,12 +1518,14 @@ void DAESaver::add_geom() {
 		write_geometry(temp, model->Debris(i), model_subobjects[model->Debris(i)], debris, debris_node);
 	}
 
+	map_destroyed_subobjects();
+
 	temp = "turret0";
 	pugi::xml_node turret_root = scene.append_child("node");
 	pugi::xml_node translate = turret_root.prepend_child("translate");
 	translate.text().set(write_vector3d(vector3d(0, 0, 0)).c_str());
-	turret_root.append_attribute("id") = "turret-root";
-	turret_root.append_attribute("name") = "turret-root";
+	turret_root.append_attribute("id") = "turrets";
+	turret_root.append_attribute("name") = "turrets";
 
 	for (int i = 0; i < model->GetTurretCount(); i++) {
 		temp[strlen("turret0")] = ((i + 1) % 10) + '0';
@@ -1529,54 +1533,94 @@ void DAESaver::add_geom() {
 		pcs_turret &turret = model->Turret(i);
 		int parent_idx = turret.sobj_parent;
 		int physical_parent_index = turret.sobj_par_phys;
-		string turret_name("turret");
+		pcs_sobj & parent = model_subobjects[parent_idx];
 		if (turret.multi_part()) {
-			string idx_str = to_string(i);
-			turret_name += idx_str;
-			pcs_sobj obj = model_subobjects[parent_idx];
-			if (boost::algorithm::icontains(obj.name, "miss")) {
-				turret_name += "-missile";
-			}
-		//	pugi::xml_node turret_node = turret_root.append_child("node");
-		//	turret_node.append_attribute("id") = turret_name.c_str();// obj.name.c_str();
-		//	turret_node.append_attribute("name") = turret_name.c_str();// obj.name.c_str();
-		//	subobjs[parent_idx] = turret_node; //put in list of xml nodes
-			cout << "Found a Turret! Multi part (" << turret_name << ")" << endl;
+			cout << "Found a Turret! Multi part (" << parent.name << ")" << endl;
 			pugi::xml_node base_node;
-			write_geometry(turret_name, parent_idx, model_subobjects[parent_idx], turret_root, base_node);
-			write_firepoints(turret, base_node);
-
-			turret_name = "turret-barrel";
-			if (boost::algorithm::icontains(obj.name, "miss")) {
+			string turret_name = string("turret") + to_string(i);
+			if (boost::algorithm::icontains(parent.name, "miss")) {
 				turret_name += "-missile";
 			}
-			turret_name += idx_str;
-		//	obj = model_subobjects[physical_parent_index];
-		//	pugi::xml_node turret_barrel_node = turret_node.append_child("node");
-		//	turret_barrel_node.append_attribute("id") = turret_name.c_str();// obj.name.c_str();
-		//	turret_barrel_node.append_attribute("name") = turret_name.c_str();// obj.name.c_str();
-		//	subobjs[physical_parent_index] = turret_barrel_node; //put in list of xml nodes
+			write_geometry(turret_name, parent_idx, parent, turret_root, base_node);
+
+			turret_name = "turret-barrel" + to_string(i);
+			if (boost::algorithm::icontains(parent.name, "miss")) {
+				turret_name = "turret-missile-barrel" + to_string(i);
+			}
 			pugi::xml_node barrel_node;
 			write_geometry(turret_name, physical_parent_index, model_subobjects[physical_parent_index], base_node, barrel_node);
 			write_firepoints(turret, barrel_node);
 
-		} else {
-			string turret_name("turret");
-			string idx_str = to_string(i);
-			turret_name += idx_str;
-			//pcs_sobj obj = model_subobjects[parent_idx];
-			//pugi::xml_node turret_node = turret_root.append_child("node");
-			//turret_node.append_attribute("id") = turret_name.c_str();// obj.name.c_str();
-			//turret_node.append_attribute("name") = turret_name.c_str();// obj.name.c_str();
-			//subobjs[parent_idx] = turret_node; //put in list of xml nodes
-			cout << "Found a Turret! Single part (" << turret_name << ")" << endl;
+		}
+		else {
+			cout << "Found a Turret! Single part (" << parent.name << ")" << endl;
 			pugi::xml_node turret_node;
-			write_geometry(turret_name, parent_idx, model_subobjects[parent_idx], turret_root, turret_node);
+			string turret_name = string("turret") + to_string(i);
+			if (boost::algorithm::icontains(parent.name, "miss")) {
+				turret_name += "-missile";
+			}
+			write_geometry(turret_name, parent_idx, parent, turret_root, turret_node);
 			write_firepoints(turret, turret_node);
 		}
 	}
+
+	//write the leftovers
+	pugi::xml_node subobjects_root = scene.append_child("node");
+	subobjects_root.append_attribute("id") = "subobjects";
+	subobjects_root.append_attribute("name") = "subobjects";
 	for (int i = 0; i < model->GetSOBJCount(); i++) {
-		get_subobj(i);
+		write_subobject(i, subobjects_root);
+	}
+}
+
+void DAESaver::map_destroyed_subobjects() {
+	int turret_count = model->GetTurretCount();
+	vector<int> destroyed_indicies;
+	vector<pcs_sobj>& model_subobjects = model->get_subobjects();
+	int length = model_subobjects.size();
+	for (int i = 0; i < turret_count; i++) {
+		pcs_turret & turret = model->Turret(i);
+		pcs_sobj &turret_obj = model_subobjects[turret.sobj_parent];
+		string turret_name = turret_obj.name;
+		string destroyed_turret_name = turret_name + "-destroyed";
+		for (int j = 0; j < length; j++) {
+			pcs_sobj &other = model_subobjects[j];
+			if (boost::algorithm::iequals(destroyed_turret_name, other.name)) {
+				cout << "found a match! " << turret_name << " -> " << other.name << endl;
+				destroyed_indicies.push_back(j);
+				if (boost::algorithm::icontains(turret_name, "miss")) {
+					turret_obj.name = string("turret") + to_string(i) + "-missile";
+					other.name = string("turret") + to_string(i) + "-missile-destroyed";
+				}
+				else {
+					turret_obj.name = "turret" + to_string(i);
+					other.name = "turret" + to_string(i) + "-destroyed";
+				}
+				break;
+			}
+		}
+	}
+	pugi::xml_node destroyed_turret_root = scene.append_child("node");
+	destroyed_turret_root.append_attribute("id") = "turrets-destroyed";
+	destroyed_turret_root.append_attribute("name") = "turrets-destroyed";
+	for (int i = 0; i < destroyed_indicies.size(); i++) {
+		int obj_index = destroyed_indicies[i];
+		pcs_sobj & destroyed_subobject = model_subobjects[obj_index];
+		pugi::xml_node out;
+		cout << "Writing " << destroyed_subobject.name << " from idx " << obj_index << endl;
+		write_geometry(destroyed_subobject.name, obj_index, destroyed_subobject, destroyed_turret_root, out);
+	}
+
+	pugi::xml_node destroyed_subobject_root = scene.append_child("node");
+	destroyed_subobject_root.append_attribute("id") = "subobjects-destroyed";
+	destroyed_subobject_root.append_attribute("name") = "subobjects-destroyed";
+	for (int i = 0; i < model_subobjects.size(); i++) {
+		pcs_sobj & subobject = model_subobjects[i];
+		if (boost::algorithm::icontains(subobject.name, "destroy")) {
+			pugi::xml_node dummy;
+			write_geometry(subobject.name, i, subobject, destroyed_subobject_root, dummy);
+		}
+		
 	}
 }
 
@@ -1590,10 +1634,11 @@ void DAESaver::write_firepoints(pcs_turret &turret_instance, pugi::xml_node &nod
 	}
 }
 
-void DAESaver::write_geometry(string &name, int idx,  pcs_sobj &obj, pugi::xml_node &parent_node, pugi::xml_node& out_node) {
+void DAESaver::write_geometry(string &name, int idx, pcs_sobj &obj, pugi::xml_node &parent_node, pugi::xml_node& out_node) {
+	if (subobjs[idx]) return;
 	out_node = parent_node.append_child("node");
-	out_node.append_attribute("id") = name.c_str();// obj.name.c_str();
-	out_node.append_attribute("name") = name.c_str();// obj.name.c_str();
+	out_node.append_attribute("id") = name.c_str();
+	out_node.append_attribute("name") = name.c_str();
 	subobjs[idx] = out_node; //put in list of xml nodes
 
 	pugi::xml_node translate = out_node.prepend_child("translate");
@@ -1626,9 +1671,67 @@ void DAESaver::write_geometry(string &name, int idx,  pcs_sobj &obj, pugi::xml_n
 	temp.append_attribute("url") = (string("#") + name.c_str() + "-geometry").c_str();
 	group_name << name.c_str() << "-geometry";
 	current_group = get_polygroups(polies, string(group_name.str().c_str()), out_node);
+	
 }
 
-//seems like if I want to custom process turrets, i need to do so in the way detail and debris are done above
+void DAESaver::write_subobject(int idx, pugi::xml_node &root) {
+	if (subobjs[idx]) {
+		cout << "Already have " << idx << " moving along" << endl;
+		return;
+	}
+	pugi::xml_node subobj;
+	pcs_sobj& sobj = model->SOBJ(idx);
+	//if subobject has no parent node, makeit a scene_library root child
+	if (sobj.parent_sobj == -1) {
+		subobj = root.append_child("node");
+	}
+	else if (subobjs[sobj.parent_sobj]) {
+		subobj = root.append_child("node");//subobjs[sobj.parent_sobj].append_child("node");
+	}
+	else {
+		return;
+	}
+
+	//put this subobject in the list of 'processed subobjects' so we dont re-add the same node
+	subobjs[idx] = subobj;
+	pugi::xml_node translate = subobj.prepend_child("translate");
+	translate.text().set(write_vector3d(sobj.offset).c_str());
+
+	subobj.append_attribute("id") = sobj.name.c_str();
+	subobj.append_attribute("name") = sobj.name.c_str();
+
+	// split up polies by texture...
+	vector<vector<pcs_polygon*> > polies;
+	polies.resize(num_textures + 1);
+	vector<unsigned int> counters;
+	counters.resize(num_textures + 1, 0);
+	for (unsigned int i = 0; i < sobj.polygons.size(); i++) {
+		if (sobj.polygons[i].texture_id < num_textures && sobj.polygons[i].texture_id >= 0) {
+			polies[sobj.polygons[i].texture_id].push_back(&(sobj.polygons[i]));
+			counters[sobj.polygons[i].texture_id]++;
+		}
+		else {
+			polies[num_textures].push_back(&(sobj.polygons[i]));
+			counters[num_textures]++;
+		}
+	}
+	for (int i = 0; i <= num_textures; i++) {
+		if (polies[i].size() != counters[i]) {
+			polies[i].resize(counters[i]);
+		}
+	}
+	pugi::xml_node current_group;
+	pugi::xml_node temp;
+	stringstream group_name;
+	temp = subobj.insert_child_after("instance_geometry", translate);
+	temp.append_child("bind_material").append_child("technique_common");
+	temp.append_attribute("url") = (string("#") + get_name(subobj).c_str() + "-geometry").c_str();
+	group_name << get_name(subobj).c_str() << "-geometry";
+	current_group = get_polygroups(polies, string(group_name.str().c_str()), subobj);
+
+}
+
+//-- this is no longer used but here for reference
 void DAESaver::get_subobj(int idx, string *name) {
 	if (subobjs[idx]) {
 		cout << "Already have " << idx << " moving along" << endl;
@@ -1935,11 +2038,14 @@ void DAESaver::add_docks() {
 	pugi::xml_node group;
 	stringstream name;
 	pcs_dock_point *dockpoint;
+	pugi::xml_node dock_root = scene.append_child("node");
+	dock_root.append_attribute("id") = "dockpoints";
+	dock_root.append_attribute("name") = "dockpoints";
 	for (int i = 0; i < model->GetDockingCount(); i++) {
 		dockpoint = &model->Dock(i);
 		name.str("");
 		name << "dockpoint" << setfill('0') << setw(2) << (i + 1);
-		group = scene.append_child("node");
+		group = dock_root.append_child("node");
 		group.append_attribute("id") = name.str().c_str();
 		group.append_attribute("name") = name.str().c_str();
 		docks.push_back(group);
@@ -2056,6 +2162,9 @@ void DAESaver::add_subsystems() {
 	stringstream name;
 	pcs_special *subsys;
 	vector3d scale_vec;
+	pugi::xml_node subsystem_root = scene.append_child("node");
+	subsystem_root.append_attribute("id") = "subsystems";
+	subsystem_root.append_attribute("name") = "subsystems";
 	for (int i = 0; i < model->GetSpecialCount(); i++) {
 		subsys = &model->Special(i);
 		name.str("");
@@ -2067,7 +2176,7 @@ void DAESaver::add_subsystems() {
 		}
 		name << (subsys->name.c_str() + 1);
 
-		element = scene.append_child("node");
+		element = subsystem_root.append_child("node");
 		element.append_attribute("id") = name.str().c_str();
 		element.append_attribute("name") = name.str().c_str();
 		translate = element.append_child("translate");
@@ -2188,10 +2297,13 @@ void DAESaver::add_glows() {
 	pugi::xml_node element;
 	pugi::xml_node glowpoint;
 	pugi::xml_node trans;
-
+	pugi::xml_node glow_root = scene.append_child("glowpoints");
+	glow_root.append_attribute("id") = "glowpoints";
+	glow_root.append_attribute("name") = "glowpoints";
 	for (int i = 0; i < model->GetLightCount(); i++) {
 		glows = model->Light(i);
-		element = find_helper(subobjs[glows.obj_parent]).append_child("node");
+		element = glow_root.append_child("node");
+		//element = find_helper(subobjs[glows.obj_parent]).append_child("node");
 		element.append_attribute("id") = "glowbank";
 		element.append_attribute("name") = "glowbank";
 		std::stringstream fields;
